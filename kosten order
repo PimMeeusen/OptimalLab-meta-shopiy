@@ -1,0 +1,92 @@
+import gspread
+from google.oauth2.service_account import Credentials
+import pandas as pd
+
+# ----------------------------
+# CONFIGURATIE
+# ----------------------------
+SERVICE_ACCOUNT_FILE = r"C:\Program Files (x86)\Python\Projects\Weekcijfers Shopify\cijfers-optimallab-317fd04eb8e0.json"
+SHEET_ID = "12LoZ4Bb0n7iCmvD9TmtJDlvusbjOF05ltyJaAeHI0gc"
+EXCEL_FILE = r"C:\Program Files (x86)\Python\Projects\Weekcijfers Shopify\shopify_orders.xlsx"
+
+# ----------------------------
+# GOOGLE SHEETS CONNECTIE
+# ----------------------------
+scope = ["https://spreadsheets.google.com/feeds",
+         "https://www.googleapis.com/auth/drive"]
+
+creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=scope)
+client = gspread.authorize(creds)
+
+sheet = client.open_by_key(SHEET_ID).sheet1
+gs_data = sheet.get_all_records()
+gs_df = pd.DataFrame(gs_data)
+
+# Kolomnamen instellen
+gs_df.rename(columns={gs_df.columns[0]: "product_name", gs_df.columns[1]: "cost_per_unit"}, inplace=True)
+
+# ----------------------------
+# KOSTEN CORRECT PARSEN
+# ----------------------------
+def parse_cost(x):
+    """Zet string of groot getal om naar float en rond af op 2 decimalen"""
+    if isinstance(x, str):
+        x = x.replace(",", ".")
+    try:
+        cost = float(x)
+        # Als kosten > 1000, deel door 1e9 (zoals bij 2298000284 -> 2,298)
+        if cost > 1000:
+            cost = cost / 1e9
+        return round(cost, 2)
+    except:
+        return 0
+
+gs_df['cost_per_unit'] = gs_df['cost_per_unit'].apply(parse_cost)
+
+# ----------------------------
+# PRODUCT NAAM NORMALISEREN
+# ----------------------------
+product_name_map = {
+    "50+ Slaapformule ®": "50+ Slaapformule®",
+    "50+ Slaapformule®": "50+ Slaapformule®",
+    "Optimal Sleep - Onderbrekingsvrije Slaapformule®": "Optimal Sleep - Onderbrekingsvrije Slaapformule®",
+    "Stress Vrijslaapformule®": "Stress Vrijslaapformule®",
+    "Premium Slaapformule®": "Premium Slaapformule®",
+    "Optimal Sleep - ShiftZzz® - 30 dagen": "Optimal Sleep - ShiftZzz® - 30 dagen"
+}
+
+# ----------------------------
+# EXCEL LEZEN
+# ----------------------------
+orders_df = pd.read_excel(EXCEL_FILE)
+
+# Normaliseer product_name in orders_df
+orders_df['product_name_normalized'] = orders_df['product_name'].map(lambda x: product_name_map.get(x, x))
+
+# ----------------------------
+# KOSTEN TOEVOEGEN
+# ----------------------------
+merged_df = pd.merge(
+    orders_df,
+    gs_df,
+    how='left',
+    left_on='product_name_normalized',
+    right_on='product_name'
+)
+
+# Bereken total_cost
+merged_df['total_cost'] = merged_df['quantity'] * merged_df['cost_per_unit']
+merged_df['cost_per_unit'] = merged_df['cost_per_unit'].round(2)
+merged_df['total_cost'] = merged_df['total_cost'].round(2)
+
+# Kolommen netjes maken
+merged_df.drop(columns=['product_name_normalized', 'product_name_y'], inplace=True)
+merged_df.rename(columns={'product_name_x': 'product_name'}, inplace=True)
+
+# ----------------------------
+# OPSLAAN IN EXCEL
+# ----------------------------
+OUTPUT_FILE = r"C:\Program Files (x86)\Python\Projects\Weekcijfers Shopify\shopify_orders_met_kosten.xlsx"
+merged_df.to_excel(OUTPUT_FILE, index=False)
+
+print(f"✅ Kosten toegevoegd en opgeslagen in {OUTPUT_FILE}")
